@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mukbang Mania!</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* Hide scrollbars */
+            background-color: #1a1a1a;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Inter', sans-serif; /* Using Inter font */
+            color: #eee;
+        }
+
+        #game-container {
+            /* Phaser canvas will fill this container */
+            width: 1280px; /* Default desktop resolution */
+            height: 720px;
+            background-color: #000; /* Black background for canvas */
+            border: 5px solid #555;
+            box-shadow: 0 0 30px rgba(0, 0, 0, 0.8);
+            position: relative;
+            border-radius: 15px; /* Rounded corners for the game container */
+        }
+
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 1300px) {
+            #game-container {
+                width: 100vw;
+                height: calc(100vh - 10px); /* Account for body margin if any */
+                border-radius: 0; /* No rounded corners on small screens for full coverage */
+            }
+        }
+    </style>
+    <!-- Phaser and Howler.js CDN links -->
+    <script src="https://cdn.jsdelivr.net/npm/phaser@3.80.1/dist/phaser.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/howler.js/2.2.4/howler.min.js"></script>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- Phaser will inject its canvas here -->
+    </div>
+
+    <script>
+        // --- Global Game Configuration ---
+        const GAME_WIDTH = 1280;
+        const GAME_HEIGHT = 720;
+        let isMobileFriendly = false; // Global flag for mobile mode
+
+        const config = {
+            type: Phaser.AUTO, // Automatically choose Canvas or WebGL
+            width: GAME_WIDTH,
+            height: GAME_HEIGHT,
+            parent: 'game-container', // ID of the div in index.html
+            scene: [], // Scenes will be added dynamically
+            pixelArt: false,
+            physics: {
+                default: 'arcade',
+                arcade: {
+                    debug: false
+                }
+            },
+            scale: {
+                mode: Phaser.Scale.FIT, // Fit the game within the parent container
+                autoCenter: Phaser.Scale.CENTER_BOTH, // Center the game horizontally and vertically
+                zoom: 1 // Default zoom level
+            },
+            audio: {
+                disableWebAudio: false // Enable Web Audio API
+            }
+        };
+
+        // --- Audio Manager Class (Howler.js based) ---
+        class AudioManager {
+            constructor() {
+                this.sounds = {};
+                this.music = null;
+                Howler.volume(0.8); // Global volume control
+            }
+
+            loadSound(key, url, loop = false, volume = 1) {
+                this.sounds[key] = new Howl({
+                    src: [url],
+                    loop: loop,
+                    volume: volume,
+                    preload: true,
+                    onload: () => console.log(`Sound loaded: ${key}`),
+                    onloaderror: (id, error) => console.error(`Error loading sound ${key}: ${error}`)
+                });
+            }
+
+            loadSounds(soundList) {
+                soundList.forEach(sound => {
+                    this.loadSound(sound.key, sound.url, sound.loop, sound.volume);
+                });
+            }
+
+            playSound(key, sprite = null) {
+                if (this.sounds[key]) {
+                    return this.sounds[key].play(sprite);
+                }
+                console.warn(`Sound not found: ${key}`);
+                return null;
+            }
+
+            playMusic(key, fade = true) {
+                if (this.music && this.music.playing()) {
+                    this.music.stop();
+                }
+                if (this.sounds[key]) {
+                    this.music = this.sounds[key];
+                    this.music.play();
+                    if (fade) {
+                        this.music.fade(0, this.music.volume(), 1000, this.music.play()); // Fade in
+                    }
+                } else {
+                    console.warn(`Music not found: ${key}`);
+                }
+            }
+
+            stopMusic(fade = true) {
+                if (this.music && this.music.playing()) {
+                    if (fade) {
+                        this.music.fade(this.music.volume(), 0, 1000, () => {
+                            this.music.stop();
+                        });
+                    } else {
+                        this.music.stop();
+                    }
+                }
+            }
+
+            setVolume(volume) {
+                Howler.volume(volume);
+            }
+        }
+        const audioManager = new AudioManager();
+
+        // --- Utility to convert SVG string to Base64 Data URL ---
+        function svgToBase64(svgString) {
+            return 'data:image/svg+xml;base64,' + btoa(svgString);
+        }
+
+        // --- Self-drawn SVG Definitions (as strings) ---
+        const SVG_ASSETS = {
+            playerBody: `
+                <svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="0" y="0" width="200" height="200" rx="30" ry="30" fill="#FFDDC1"/>
+                    <rect x="10" y="10" width="180" height="180" rx="20" ry="20" fill="#E0BBE4"/> <!-- Shirt -->
+                    <circle cx="50" cy="100" r="30" fill="#FFDDC1"/> <!-- Left Arm -->
+                    <circle cx="150" cy="100" r="30" fill="#FFDDC1"/> <!-- Right Arm -->
+                </svg>
+            `,
+            playerHead: `
+                <svg width="150" height="150" viewBox="0 0 150 150" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="75" cy="75" r="70" fill="#FFDDC1"/>
+                    <circle cx="55" cy="60" r="8" fill="black"/> <!-- Left Eye -->
+                    <circle cx="95" cy="60" r="8" fill="black"/> <!-- Right Eye -->
+                    <path d="M60,90 Q75,110 90,90" stroke="black" stroke-width="3" fill="none"/> <!-- Default Mouth -->
+                </svg>
+            `,
+            noodleBowl: `
+                <svg width="300" height="200" viewBox="0 0 300 200" xmlns="http://www.w3.org/2000/svg">
+                    <ellipse cx="150" cy="170" rx="140" ry="30" fill="#C0C0C0" stroke="#A0A0A0" stroke-width="5"/> <!-- Bowl base -->
+                    <ellipse cx="150" cy="140" rx="130" ry="25" fill="#E0E0E0" stroke="#C0C0C0" stroke-width="3"/> <!-- Bowl top -->
+                    <path d="M80,130 Q120,100 150,130 T220,130 L220,150 Q180,180 150,150 T80,150 Z" fill="#F0E68C" opacity="0.8"/> <!-- Noodles 1 -->
+                    <path d="M90,120 Q140,90 190,120 L190,140 Q140,170 90,140 Z" fill="#F0E68C" opacity="0.8"/> <!-- Noodles 2 -->
+                    <circle cx="100" cy="135" r="8" fill="#FF6347"/> <!-- Chili -->
+                    <circle cx="180" cy="125" r="8" fill="#FF6347"/> <!-- Chili -->
+                </svg>
+            `,
+            chopsticks: `
+                <svg width="50" height="150" viewBox="0 0 50 150" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="10" y="0" width="10" height="150" rx="5" ry="5" fill="#8B4513"/>
+                    <rect x="30" y="0" width="10" height="150" rx="5" ry="5" fill="#8B4513"/>
+                </svg>
+            `
+        };
+
+        // --- Boot Scene ---
+        class BootScene extends Phaser.Scene {
+            constructor() {
+                super('BootScene');
+            }
+
+            preload() {
+                // Load any initial assets if needed (e.g., a loading screen background)
+                // For this simple game, we'll directly jump to PreloadScene
+            }
+
+            create() {
+                this.scene.start('PreloadScene');
+            }
+        }
+
+        // --- Preload Scene ---
+        class PreloadScene extends Phaser.Scene {
+            constructor() {
+                super('PreloadScene');
+            }
+
+            preload() {
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT / 2 - 50, 'Loading...', { fontSize: '48px', fill: '#fff' }).setOrigin(0.5);
+
+                // Load audio assets
+                audioManager.loadSounds([
+                    { key: 'slurp_sfx', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/slurp.mp3', volume: 0.7 },
+                    { key: 'crunch_sfx', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/crunch.mp3', volume: 0.8 },
+                    { key: 'burp_sfx', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/burp.mp3', volume: 0.6 },
+                    { key: 'coin_sfx', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/coin.mp3', volume: 0.5 },
+                    { key: 'bg_music', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/bg_music.mp3', loop: true, volume: 0.4 },
+                    { key: 'button_click', url: 'https://cdn.jsdelivr.net/gh/samuelcust/phaser-assets/audio/button_click.mp3', volume: 0.7 },
+                ]);
+
+                // Load self-drawn SVGs as data URLs
+                this.load.image('player_body', svgToBase64(SVG_ASSETS.playerBody));
+                this.load.image('player_head', svgToBase64(SVG_ASSETS.playerHead));
+                this.load.image('noodle_bowl', svgToBase64(SVG_ASSETS.noodleBowl));
+                this.load.image('chopsticks', svgToBase64(SVG_ASSETS.chopsticks));
+
+                // Progress bar
+                let progressBar = this.add.graphics();
+                let progressBox = this.add.graphics();
+                progressBox.fillStyle(0x222222, 0.8);
+                progressBox.fillRect(GAME_WIDTH / 2 - 160, GAME_HEIGHT / 2 - 30, 320, 50);
+
+                this.load.on('progress', function (value) {
+                    progressBar.clear();
+                    progressBar.fillStyle(0xffffff, 1);
+                    progressBar.fillRect(GAME_WIDTH / 2 - 150, GAME_HEIGHT / 2 - 20, 300 * value, 30);
+                });
+
+                this.load.on('complete', function () {
+                    progressBar.destroy();
+                    progressBox.destroy();
+                    this.scene.start('MenuScene'); // Go to Menu Scene after loading
+                }, this);
+            }
+        }
+
+        // --- Menu Scene ---
+        class MenuScene extends Phaser.Scene {
+            constructor() {
+                super('MenuScene');
+            }
+
+            create() {
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.2, 'Mukbang Mania!', { fontSize: '80px', fill: '#FFD700', stroke: '#8B0000', strokeThickness: 8 }).setOrigin(0.5);
+
+                this.createButton(GAME_WIDTH / 2, GAME_HEIGHT * 0.45, 'Play Game', () => {
+                    audioManager.playSound('button_click');
+                    this.scene.start('GameScene');
+                });
+
+                this.createButton(GAME_WIDTH / 2, GAME_HEIGHT * 0.6, 'Settings', () => {
+                    audioManager.playSound('button_click');
+                    this.scene.start('SettingsScene');
+                });
+
+                this.createButton(GAME_WIDTH / 2, GAME_HEIGHT * 0.75, 'Exit', () => {
+                    audioManager.playSound('button_click');
+                    // In a web environment, "exit" usually means going back to the previous page
+                    // or showing a "Thanks for playing" message.
+                    alert('Thanks for playing Mukbang Mania!');
+                    // You might want to stop all audio here
+                    audioManager.stopMusic(false);
+                    this.game.destroy(true); // Destroy Phaser game instance
+                });
+
+                audioManager.playMusic('bg_music'); // Play menu music
+            }
+
+            createButton(x, y, text, callback) {
+                const button = this.add.text(x, y, text, {
+                    fontSize: '48px',
+                    fill: '#ffffff',
+                    backgroundColor: '#4CAF50',
+                    padding: { x: 30, y: 15 },
+                    borderRadius: 10 // Not directly supported by Phaser text, but for visual intent
+                })
+                .setOrigin(0.5)
+                .setInteractive({ useHandCursor: true })
+                .on('pointerover', () => button.setStyle({ backgroundColor: '#66BB6A' }))
+                .on('pointerout', () => button.setStyle({ backgroundColor: '#4CAF50' }))
+                .on('pointerdown', callback);
+
+                // Add a simple shadow effect
+                const shadow = this.add.rectangle(x + 5, y + 5, button.width, button.height, 0x000000, 0.3)
+                    .setOrigin(0.5)
+                    .setDepth(-1); // Place behind the text
+                button.on('pointerover', () => shadow.setY(y + 2)); // Lift shadow slightly
+                button.on('pointerout', () => shadow.setY(y + 5));
+            }
+        }
+
+        // --- Settings Scene ---
+        class SettingsScene extends Phaser.Scene {
+            constructor() {
+                super('SettingsScene');
+                this.mobileToggleText = null;
+            }
+
+            create() {
+                this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.2, 'Settings', { fontSize: '60px', fill: '#FFD700', stroke: '#8B0000', strokeThickness: 6 }).setOrigin(0.5);
+
+                // Mobile Friendly Mode Toggle
+                this.mobileToggleText = this.add.text(GAME_WIDTH / 2, GAME_HEIGHT * 0.45, `Mobile Friendly Mode: ${isMobileFriendly ? 'ON' : 'OFF'}`, {
+                    fontSize: '40px',
+                    fill: '#ffffff',
+                    backgroundColor: '#3F51B5',
+                    padding: { x: 20, y: 10 }
+                })
+                .setOrigin(0.5)
+                .setInteractive({ useHandCursor: true })
+                .on('pointerdown', this.toggleMobileMode, this);
+
+                this.createButton(GAME_WIDTH / 2, GAME_HEIGHT * 0.7, 'Back to Menu', () => {
+                    audioManager.playSound('button_click');
+                    this.scene.start('MenuScene');
+                });
+            }
+
+            toggleMobileMode() {
+                audioManager.playSound('button_click');
+                isMobileFriendly = !isMobileFriendly;
+                this.mobileToggleText.setText(`Mobile Friendly Mode: ${isMobileFriendly ? 'ON' : 'OFF'}`);
+
+                // Apply scaling changes if necessary
+                if (isMobileFriendly) {
+                    this.scale.setZoom(0.8); // Example: Zoom out slightly for more content to fit
+                    // You might also adjust specific UI element positions in GameScene/UIScene based on this flag
+                } else {
+                    this.scale.setZoom(1); // Reset zoom
+                }
+                // Phaser's FIT mode already handles responsiveness well, this flag is more for UI adjustments.
+            }
+
+            createButton(x, y, text, callback) {
+                const button = this.add.text(x, y, text, {
+                    fontSize: '48px',
+                    fill: '#ffffff',
+                    backgroundColor: '#4CAF50',
+                    padding: { x: 30, y: 15 },
+                    borderRadius: 10
+                })
+                .setOrigin(0.5)
+                .setInteractive({ useHandCursor: true })
+                .on('pointerover', () => button.setStyle({ backgroundColor: '#66BB6A' }))
+                .on('pointerout', () => button.setStyle({ backgroundColor: '#4CAF50' }))
+                .on('pointerdown', callback);
+
+                const shadow = this.add.rectangle(x + 5, y + 5, button.width, button.height, 0x000000, 0.3)
+                    .setOrigin(0.5)
+                    .setDepth(-1);
+                button.on('pointerover', () => shadow.setY(y + 2));
+                button.on('pointerout', () => shadow.setY(y + 5));
+            }
+        }
+
+        // --- Game Scene ---
+        class GameScene extends Phaser.Scene {
+            constructor() {
+                super('GameScene');
+                this.player = null;
+                this.food = null;
+                this.mouthGraphics = null; // For dynamic mouth drawing
+                this.stats = {
+                    hunger: 100, // Percentage
+                    happiness: 75,
+                    comfort: 0,
+                    foodRemaining: 100 // Percentage
+                };
+                this.gameStarted = false;
+                this.chatMessages = [];
+                this.chatDisplayGroup = null;
+                this.maxChatMessages = 8;
+                this.chatTimer = null;
+
+                // UI elements
+                this.hungerBarFill = null;
+                this.happinessBarFill = null;
+                this.comfortBarFill = null;
+                this.foodRemainingText = null;
+            }
+
+            create() {
+                // --- Background (simple color for now) ---
+                this.add.rectangle(0, 0, GAME_WIDTH, GAME_HEIGHT, 0x8B9A7B).setOrigin(0); // Wall
+                this.add.rectangle(0, GAME_HEIGHT * 0.7, GAME_WIDTH, GAME_HEIGHT * 0.3, 0x6B4F4F).setOrigin(0); // Table
+
+                // --- Player Avatar (SVG based) ---
+                this.player = this.add.container(GAME_WIDTH * 0.5, GAME_HEIGHT * 0.65); // Player position
+
+                let playerBody = this.add.image(0, 0, 'player_body').setOrigin(0.5, 0.5);
+                let playerHead = this.add.image(0, -playerBody.height * 0.4, 'player_head').setOrigin(0.5, 0.5);
+
+                this.mouthGraphics = this.add.graphics(); // Graphics object for the mouth
+                this.updateMouth('closed'); // Initial closed mouth
+
+                // Position mouth relative to head
+                this.mouthGraphics.x = playerHead.x;
+                this.mouthGraphics.y = playerHead.y + 20; // Adjust Y to be on the face
+
+                this.player.add([playerBody, playerHead, this.mouthGraphics]);
+                this.player.setDepth(1); // Ensure player is above food
+
+                // --- Food Item (SVG based) ---
+                this.food = this.add.image(GAME_WIDTH * 0.5, GAME_HEIGHT * 0.85, 'noodle_bowl').setOrigin(0.5, 0.5);
+                this.food.setScale(1.0);
+                this.food.setDepth(0); // Food is behind player
+
+                // --- UI Elements (Buttons, Stats, Chat) ---
+                this.setupUI();
+
+                // --- Game Start ---
+                audioManager.playMusic('bg_music');
+                this.gameStarted = true;
+                this.addChatMessage('system', 'Welcome to Mukbang Mania!');
+
+                // Start chat timer
+                this.chatTimer = this.time.addEvent({
+                    delay: 2000, // Every 2 seconds
+                    callback: this.sendRandomChatMessage,
+                    callbackScope: this,
+                    loop: true
+                });
+            }
+
+            update() {
+                if (!this.gameStarted || this.stats.foodRemaining <= 0) return;
+
+                this.stats.hunger = Math.min(100, this.stats.hunger + 0.05); // Hunger slowly increases
+                this.stats.comfort = Math.min(100, this.stats.comfort + 0.02); // Comfort slowly builds
+
+                if (this.stats.hunger >= 100 || this.stats.comfort >= 95) {
+                    this.endMukbangSession('exhaustion');
+                }
+
+                this.updateStatsDisplay();
+            }
+
+            setupUI() {
+                const uiScale = isMobileFriendly ? 0.8 : 1; // Adjust UI scale for mobile
+                const chatPanelWidth = GAME_WIDTH * 0.3;
+                const chatPanelHeight = GAME_HEIGHT * 0.6;
+                const chatPanelX = GAME_WIDTH - chatPanelWidth - (isMobileFriendly ? 10 : 20);
+                const chatPanelY = GAME_HEIGHT * 0.05;
+
+                // --- Stat Bars ---
+                const statBarX = isMobileFriendly ? 10 : 20;
+                const statBarY = isMobileFriendly ? 10 : 20;
+                const statBarWidth = isMobileFriendly ? 180 : 200;
+                const statBarHeight = isMobileFriendly ? 15 : 20;
+                const statTextSize = isMobileFriendly ? '16px' : '18px';
+
+                this.add.text(statBarX, statBarY, 'Hunger:', { fontSize: statTextSize, fill: '#fff' }).setScale(uiScale);
+                this.add.rectangle(statBarX + 80, statBarY + 10, statBarWidth, statBarHeight, 0x555555).setOrigin(0, 0.5).setScale(uiScale);
+                this.hungerBarFill = this.add.graphics();
+                this.add.text(statBarX + 80 + statBarWidth + 10, statBarY + 10, '100%', { fontSize: statTextSize, fill: '#fff' }).setOrigin(0, 0.5).setScale(uiScale);
+
+                this.add.text(statBarX, statBarY + 30, 'Happiness:', { fontSize: statTextSize, fill: '#fff' }).setScale(uiScale);
+                this.add.rectangle(statBarX + 80, statBarY + 40, statBarWidth, statBarHeight, 0x555555).setOrigin(0, 0.5).setScale(uiScale);
+                this.happinessBarFill = this.add.graphics();
+                this.add.text(statBarX + 80 + statBarWidth + 10, statBarY + 40, '75%', { fontSize: statTextSize, fill: '#fff' }).setOrigin(0, 0.5).setScale(uiScale);
+
+                this.add.text(statBarX, statBarY + 60, 'Comfort:', { fontSize: statTextSize, fill: '#fff' }).setScale(uiScale);
+                this.add.rectangle(statBarX + 80, statBarY + 70, statBarWidth, statBarHeight, 0x555555).setOrigin(0, 0.5).setScale(uiScale);
+                this.comfortBarFill = this.add.graphics();
+                this.add.text(statBarX + 80 + statBarWidth + 10, statBarY + 70, '0%', { fontSize: statTextSize, fill: '#fff' }).setOrigin(0, 0.5).setScale(uiScale);
+
+                this.foodRemainingText = this.add.text(statBarX, statBarY + 90, 'Food Left: 100%', { fontSize: statTextSize, fill: '#fff' }).setScale(uiScale);
+
+                // --- Control Buttons ---
+                const buttonY = GAME_HEIGHT * 0.9;
+                const buttonFontSize = isMobileFriendly ? '28px' : '32px';
+                const buttonPadding = isMobileFriendly ? { x: 15, y: 8 } : { x: 20, y: 10 };
+
+                const buttonStyle = {
+                    fontSize: buttonFontSize,
+                    fill: '#ffffff',
+                    backgroundColor: '#007bff',
+                    padding: buttonPadding,
+                    borderRadius: 8
+                };
+
+                this.createButton(GAME_WIDTH * 0.2, buttonY, 'EAT!', buttonStyle, () => this.handleEatAction());
+                this.createButton(GAME_WIDTH * 0.5, buttonY, 'SLURP!', buttonStyle, () => this.handleEatAction(true));
+                this.createButton(GAME_WIDTH * 0.8, buttonY, 'CHEW!', buttonStyle, () => this.handleEatAction(false, true));
+
+                // --- Chat Feed ---
+                this.add.rectangle(chatPanelX, chatPanelY, chatPanelWidth, chatPanelHeight, 0x2a2a2a, 0.8)
+                    .setOrigin(0, 0);
+
+                this.chatDisplayGroup = this.add.group();
+                const chatMaskGraphics = this.make.graphics();
+                chatMaskGraphics.fillRect(chatPanelX + 5, chatPanelY + 5, chatPanelWidth - 10, chatPanelHeight - 10);
+                const chatMask = chatMaskGraphics.createGeometryMask();
+                this.chatDisplayGroup.setMask(chatMask);
+            }
+
+            updateStatsDisplay() {
+                const statBarX = isMobileFriendly ? 10 : 20;
+                const statBarY = isMobileFriendly ? 10 : 20;
+                const statBarWidth = isMobileFriendly ? 180 : 200;
+                const statBarHeight = isMobileFriendly ? 15 : 20;
+                const uiScale = isMobileFriendly ? 0.8 : 1;
+
+                this.hungerBarFill.clear();
+                this.hungerBarFill.fillStyle(this.stats.hunger > 20 ? 0x4CAF50 : 0xFFC107, 1);
+                this.hungerBarFill.fillRect((statBarX + 80) * uiScale, (statBarY + 10) * uiScale, (this.stats.hunger / 100) * statBarWidth * uiScale, statBarHeight * uiScale);
+
+                this.happinessBarFill.clear();
+                this.happinessBarFill.fillStyle(this.stats.happiness > 30 ? 0x2196F3 : 0xF44336, 1);
+                this.happinessBarFill.fillRect((statBarX + 80) * uiScale, (statBarY + 40) * uiScale, (this.stats.happiness / 100) * statBarWidth * uiScale, statBarHeight * uiScale);
+
+                this.comfortBarFill.clear();
+                this.comfortBarFill.fillStyle(this.stats.comfort < 70 ? 0x4CAF50 : 0xF44336, 1);
+                this.comfortBarFill.fillRect((statBarX + 80) * uiScale, (statBarY + 70) * uiScale, (this.stats.comfort / 100) * statBarWidth * uiScale, statBarHeight * uiScale);
+
+                this.foodRemainingText.setText(`Food Left: ${Math.round(this.stats.foodRemaining)}%`);
+            }
+
+            updateMouth(state) {
+                this.mouthGraphics.clear();
+                this.mouthGraphics.lineStyle(4, 0x000000, 1); // Black outline
+
+                // Mouth position relative to the player head's center (0,0 in its local space)
+                const mouthCenterX = 0;
+                const mouthCenterY = 20; // Adjusted for head
+
+                if (state === 'open') {
+                    this.mouthGraphics.beginPath();
+                    this.mouthGraphics.moveTo(mouthCenterX - 20, mouthCenterY);
+                    this.mouthGraphics.quadraticCurveTo(mouthCenterX, mouthCenterY + 20, mouthCenterX + 20, mouthCenterY);
+                    this.mouthGraphics.stroke();
+                } else { // 'closed'
+                    this.mouthGraphics.beginPath();
+                    this.mouthGraphics.moveTo(mouthCenterX - 20, mouthCenterY + 10);
+                    this.mouthGraphics.quadraticCurveTo(mouthCenterX, mouthCenterY, mouthCenterX + 20, mouthCenterY + 10);
+                    this.mouthGraphics.stroke();
+                }
+            }
+
+            handleEatAction(isSlurp = false, isChew = false) {
+                if (this.stats.foodRemaining <= 0) {
+                    this.addChatMessage('system', 'No more food left!');
+                    this.endMukbangSession('finished');
+                    return;
+                }
+
+                let eatAmount = 5;
+                let comfortIncrease = 3;
+                let happinessBoost = 2;
+                let sfx = 'crunch_sfx';
+
+                if (isSlurp) {
+                    eatAmount = 8;
+                    comfortIncrease = 5;
+                    happinessBoost = 4;
+                    sfx = 'slurp_sfx';
+                    this.addChatMessage('user', 'You: *SLURP!*');
+                } else if (isChew) {
+                    eatAmount = 6;
+                    comfortIncrease = 4;
+                    happinessBoost = 3;
+                    sfx = 'crunch_sfx';
+                    this.addChatMessage('user', 'You: *CRUNCH CRUNCH*');
+                    this.cameras.main.flash(200, 255, 0, 0); // Red flash for spicy
+                } else {
+                    this.addChatMessage('user', 'You: *NOM NOM*');
+                }
+
+                this.stats.foodRemaining = Math.max(0, this.stats.foodRemaining - eatAmount);
+                this.stats.hunger = Math.max(0, this.stats.hunger - eatAmount);
+                this.stats.comfort = Math.min(100, this.stats.comfort + comfortIncrease);
+                this.stats.happiness = Math.min(100, this.stats.happiness + happinessBoost);
+
+                audioManager.playSound(sfx);
+
+                // Player animation
+                this.tweens.add({
+                    targets: this.player,
+                    y: this.player.y + 10,
+                    duration: 100,
+                    yoyo: true,
+                    onStart: () => this.updateMouth('open'),
+                    onComplete: () => this.updateMouth('closed')
+                });
+
+                // Food animation
+                this.food.setScale(this.stats.foodRemaining / 100 * 1.0);
+
+                // Random events based on comfort/happiness
+                if (this.stats.comfort > 70 && Phaser.Math.Between(0, 100) < 10) {
+                    this.addChatMessage('system', 'You let out a loud burp!');
+                    audioManager.playSound('burp_sfx');
+                    this.stats.happiness = Math.min(100, this.stats.happiness + 5);
+                }
+
+                if (this.stats.happiness < 30 && Phaser.Math.Between(0, 100) < 5) {
+                    this.addChatMessage('hater', '@BoredViewer: Is that all you got? So lame.');
+                }
+
+                if (this.stats.foodRemaining <= 0) {
+                    this.endMukbangSession('finished');
+                }
+            }
+
+            addChatMessage(type, message) {
+                let color = '#ffffff';
+                switch(type) {
+                    case 'system': color = '#aaa'; break;
+                    case 'fan': color = '#90ee90'; break;
+                    case 'hater': color = '#ff6347'; break;
+                    case 'user': color = '#f0f0f0'; break;
+                    case 'emote': color = '#ffa500'; break;
+                }
+
+                const chatPanelX = GAME_WIDTH - (GAME_WIDTH * 0.3) - (isMobileFriendly ? 10 : 20);
+                const chatPanelWidth = GAME_WIDTH * 0.3;
+                const chatPanelHeight = GAME_HEIGHT * 0.6;
+
+                const newMessage = this.add.text(chatPanelX + 10, chatPanelY + chatPanelHeight - 20, message, {
+                    fontSize: '16px',
+                    fill: color,
+                    wordWrap: { width: chatPanelWidth - 20, useCallback: false }
+                });
+                this.chatDisplayGroup.add(newMessage);
+                this.chatMessages.push(newMessage);
+
+                if (this.chatMessages.length > this.maxChatMessages) {
+                    const oldMessage = this.chatMessages.shift();
+                    oldMessage.destroy();
+                }
+
+                let currentY = chatPanelY + chatPanelHeight - 20;
+                for (let i = this.chatMessages.length - 1; i >= 0; i--) {
+                    const msg = this.chatMessages[i];
+                    msg.y = currentY - msg.height;
+                    currentY = msg.y - 5;
+                }
+            }
+
+            sendRandomChatMessage() {
+                const messages = [
+                    { type: 'fan', text: 'Amazing! Keep it up! 🤩' },
+                    { type: 'fan', text: 'You\'re my favorite mukbanger! ❤️' },
+                    { type: 'hater', text: 'This is so fake. 😒' },
+                    { type: 'fan', text: 'What sauce are you using?! 😋' },
+                    { type: 'emote', text: '🔥🔥🔥' },
+                    { type: 'emote', text: '🤣' },
+                    { type: 'hater', text: 'Get a real job.' },
+                    { type: 'fan', text: 'So satisfying to watch you eat!' },
+                ];
+                const randomMessage = messages[Phaser.Math.Between(0, messages.length - 1)];
+                this.addChatMessage(randomMessage.type, randomMessage.text);
+            }
+
+            endMukbangSession(reason) {
+                if (!this.gameStarted) return;
+                this.gameStarted = false;
+                this.time.removeEvent(this.chatTimer);
+                audioManager.stopMusic();
+
+                let message = `Mukbang session ended! Reason: ${reason}.`;
+                this.addChatMessage('system', message);
+                this.addChatMessage('system', 'Game Over! You gained 123 followers!');
+
+                this.time.delayedCall(3000, () => {
+                    this.scene.start('MenuScene'); // Go back to menu
+                });
+            }
+
+            createButton(x, y, text, style, callback) {
+                const button = this.add.text(x, y, text, style)
+                    .setOrigin(0.5)
+                    .setInteractive({ useHandCursor: true })
+                    .on('pointerover', () => button.setStyle({ backgroundColor: '#0056b3' }))
+                    .on('pointerout', () => button.setStyle({ backgroundColor: '#007bff' }))
+                    .on('pointerdown', callback);
+
+                const shadow = this.add.rectangle(x + 5, y + 5, button.width, button.height, 0x000000, 0.3)
+                    .setOrigin(0.5)
+                    .setDepth(-1);
+                button.on('pointerover', () => shadow.setY(y + 2));
+                button.on('pointerout', () => shadow.setY(y + 5));
+            }
+        }
+
+        // --- Initialize Phaser Game ---
+        config.scene = [BootScene, PreloadScene, MenuScene, SettingsScene, GameScene];
+        const game = new Phaser.Game(config);
+
+    </script>
+</body>
+</html>
